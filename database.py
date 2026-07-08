@@ -63,20 +63,31 @@ def _ph() -> str:
 def get_conn():
     if _setup():
         pool = _get_pg_pool()
-        conn = pool.getconn()
-        try:
-            # Reset any dangling transaction from a previous use
-            if not conn.closed:
-                conn.rollback()
+        # Serverless Postgres (e.g. Neon) suspends the compute when idle and
+        # closes its connections. Those sockets linger in the pool as stale
+        # entries that fail mid-query with "SSL connection has been closed
+        # unexpectedly". A rollback() alone doesn't reliably detect a socket the
+        # server killed, so validate each pooled connection with a real
+        # round-trip (SELECT 1) and discard dead ones until we get a live one.
+        last_err = None
+        for _ in range(10):
+            conn = pool.getconn()
+            try:
+                if conn.closed:
+                    raise Exception("stale pooled connection")
+                conn.rollback()  # clear any dangling transaction
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1")
+                    cur.fetchone()
                 return conn
-        except Exception:
-            pass
-        # Connection was broken — discard and get a fresh one
-        try:
-            pool.putconn(conn, close=True)
-        except Exception:
-            pass
-        return pool.getconn()
+            except Exception as e:
+                last_err = e
+                try:
+                    pool.putconn(conn, close=True)
+                except Exception:
+                    pass
+        # Couldn't validate any pooled connection — surface the last error.
+        raise last_err if last_err else Exception("no live DB connection")
     # SQLite: reuse a single persistent connection per thread
     conn = getattr(_thread_local, "sqlite_conn", None)
     if conn is None:
