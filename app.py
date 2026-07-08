@@ -26,6 +26,12 @@ except ImportError:
     _HAS_XLSX = False
 
 try:
+    import xlrd as _xlrd
+    _HAS_XLS = True
+except ImportError:
+    _HAS_XLS = False
+
+try:
     import streamlit as _st_pre
     for _key in ("DATABASE_URL", "ANTHROPIC_API_KEY"):
         if _key in _st_pre.secrets:
@@ -1016,11 +1022,25 @@ def _extract_text(uploaded_file) -> str:
                 if cells:
                     parts.append(" | ".join(cells))
         return "\n".join(parts)
-    if name.endswith((".xlsx", ".xls")):
+    if name.endswith(".xls"):
+        # Legacy binary .xls format — openpyxl can't read it, so use xlrd.
+        if not _HAS_XLS:
+            return "(Legacy .xls extraction unavailable — xlrd not installed)"
+        try:
+            book = _xlrd.open_workbook(file_contents=raw)
+            parts = []
+            for sheet in book.sheets():
+                parts.append(f"=== Sheet: {sheet.name} ===")
+                for r in range(sheet.nrows):
+                    cells = [str(c) if c is not None else "" for c in sheet.row_values(r)]
+                    if any(c.strip() for c in cells):
+                        parts.append("\t".join(cells))
+            return "\n".join(parts)
+        except Exception as exc:
+            return f"(Excel parse error: {exc})"
+    if name.endswith(".xlsx"):
         if not _HAS_XLSX:
             return "(Excel extraction unavailable — openpyxl not installed)"
-        if name.endswith(".xls"):
-            return "(Legacy .xls format not supported — please resave as .xlsx)"
         try:
             wb = _openpyxl.load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
             parts = []
@@ -1505,12 +1525,12 @@ def _opp_inline_panel(opp_id: int):
             # ── Upload a prepared proposal for Aishah to use as context ───────────
             with st.expander("📤 Upload Prepared Proposal", expanded=not existing_prop):
                 st.caption(
-                    "Upload an existing proposal document (PDF, DOCX, or TXT). "
+                    "Upload an existing proposal document (PDF, DOCX, TXT, or Excel). "
                     "Aishah will use it as context in the Chat tab."
                 )
                 _uploaded_prop = st.file_uploader(
                     "Proposal document",
-                    type=["pdf", "docx", "txt"],
+                    type=["pdf", "docx", "txt", "xlsx", "xls"],
                     key=f"prop_upload_{opp_id}",
                     label_visibility="collapsed",
                 )
