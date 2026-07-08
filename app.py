@@ -1080,18 +1080,22 @@ def _generate_proposal(opp: dict, scope_docs: list) -> tuple:
         "Generate a comprehensive PwC-quality proposal JSON."
     )
     client_ai = anthropic.Anthropic(api_key=api_key)
-    # Try with adaptive thinking first; fall back to plain request if unsupported
+    # Stream the request so a long generation keeps the connection active —
+    # a non-streaming call can sit idle long enough for a proxy to drop it,
+    # which surfaces as the request silently stopping with no result.
+    # Try adaptive thinking first; fall back to a plain request if unsupported.
     for kwargs in [
         {"thinking": {"type": "adaptive"}, "max_tokens": 8000},
         {"max_tokens": 4096},
     ]:
         try:
-            resp = client_ai.messages.create(
+            with client_ai.messages.stream(
                 model="claude-opus-4-8",
                 system=_PROPOSAL_SYSTEM,
                 messages=[{"role": "user", "content": prompt}],
                 **kwargs,
-            )
+            ) as stream:
+                resp = stream.get_final_message()
             for block in resp.content:
                 if hasattr(block, "text"):
                     txt = block.text.strip()
