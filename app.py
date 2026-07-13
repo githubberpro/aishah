@@ -1305,6 +1305,102 @@ def _generate_company_overview(client: dict) -> tuple:
     return None, "Generation failed after retrying without extended thinking."
 
 
+_STAKEHOLDER_MAP_SYSTEM = (
+    "You are a research analyst mapping the key decision-makers and influencers at a "
+    "client company for a professional-services account team. Use the web_search tool "
+    "to identify the company's most senior and relevant leaders — e.g. CEO, CFO, "
+    "CIO/CTO, Chief Data/AI Officer, COO, and heads of strategy, transformation, or "
+    "procurement — that an advisory firm would need to engage. For each person give "
+    "their current title and a 1-2 sentence bio (background, tenure, focus areas, "
+    "anything relevant to selling advisory or AI services). Prefer recent, reputable "
+    "sources. Do NOT invent people or titles you cannot verify — if you are unsure "
+    "someone currently holds a role, omit them. Respond ONLY with a JSON object of the "
+    "form {\"stakeholders\": [{\"name\": \"...\", \"title\": \"...\", \"role\": \"...\", "
+    "\"bio\": \"...\"}]}. \"role\" is a short tag such as \"Economic Buyer\", "
+    "\"Champion\", \"Technical Buyer\", \"Influencer\", or \"Executive\". Include 4-8 "
+    "stakeholders, most senior first. No markdown code fences, no citation markup, no "
+    "extra keys, no commentary outside the JSON object."
+)
+
+
+def _generate_stakeholder_map(client: dict) -> tuple:
+    """Call Claude (with live web search) to build a stakeholder map for a client.
+    Returns (list_of_dicts, None) on success or (None, error_str) on failure.
+    """
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        return None, "ANTHROPIC_API_KEY not set in Streamlit secrets."
+    facts = "\n".join(
+        f"{label}: {client.get(key)}"
+        for label, key in [
+            ("Company", "company"), ("Sector", "sector"), ("Sub-sector", "sub_sector"),
+            ("Country", "country"), ("Website", "website"),
+        ]
+        if client.get(key)
+    )
+    prompt = (
+        "Research and build a stakeholder map (key executives and influencers) for the "
+        "following client.\n\n"
+        f"{facts}\n\n"
+        "Return the stakeholders as a JSON object."
+    )
+    client_ai = anthropic.Anthropic(api_key=api_key)
+    tools = [{"type": "web_search_20260209", "name": "web_search", "max_uses": 6}]
+    for kwargs in [
+        {"thinking": {"type": "adaptive"}, "max_tokens": 4000},
+        {"max_tokens": 2500},
+    ]:
+        try:
+            messages = [{"role": "user", "content": prompt}]
+            resp = None
+            for _ in range(6):
+                with client_ai.messages.stream(
+                    model="claude-opus-4-8",
+                    system=_STAKEHOLDER_MAP_SYSTEM,
+                    messages=messages,
+                    tools=tools,
+                    **kwargs,
+                ) as stream:
+                    resp = stream.get_final_message()
+                if resp.stop_reason != "pause_turn":
+                    break
+                messages.append({"role": "assistant", "content": resp.content})
+            combined = "\n".join(
+                b.text for b in (resp.content if resp else [])
+                if getattr(b, "type", None) == "text"
+            ).strip()
+            fence_start = combined.find("```json")
+            if fence_start >= 0:
+                fence_end = combined.find("```", fence_start + 7)
+                if fence_end > fence_start:
+                    combined = combined[fence_start + 7:fence_end].strip()
+            start = combined.find("{")
+            end = combined.rfind("}") + 1
+            if start >= 0 and end > start:
+                data = json.loads(combined[start:end])
+                stakeholders = data.get("stakeholders")
+                if isinstance(stakeholders, list) and stakeholders:
+                    cleaned = [
+                        {
+                            "name": str(s.get("name", "")).strip(),
+                            "title": str(s.get("title", "")).strip(),
+                            "role": str(s.get("role", "")).strip(),
+                            "bio": str(s.get("bio", "")).strip(),
+                        }
+                        for s in stakeholders if isinstance(s, dict) and s.get("name")
+                    ]
+                    if cleaned:
+                        return cleaned, None
+            return None, "Claude responded but returned no stakeholders. Try again."
+        except anthropic.BadRequestError as exc:
+            if "thinking" in str(exc).lower() or "adaptive" in str(exc).lower():
+                continue  # retry without thinking
+            return None, f"API error: {exc}"
+        except Exception as exc:
+            return None, f"{type(exc).__name__}: {exc}"
+    return None, "Generation failed after retrying without extended thinking."
+
+
 def _proposal_total(proposal: dict) -> float:
     return sum(
         r.get("rate_per_day", 0) * r.get("days", 0)
@@ -2975,7 +3071,63 @@ elif page == "Account Plan":
 
             # ── Stakeholders ──────────────────────────────────────────────────
             with _tab_sh:
-                st.markdown("#### Stakeholder Map")
+                # ── AI-researched stakeholder map ─────────────────────────────
+                _sm_api_ready = bool(os.environ.get("ANTHROPIC_API_KEY", ""))
+                _sm_raw = _ap_c.get("stakeholder_map", "")
+                _sm_list = []
+                if _sm_raw:
+                    try:
+                        _sm_list = json.loads(_sm_raw)
+                    except Exception:
+                        _sm_list = []
+                st.markdown("#### 🔎 Researched Stakeholders")
+                _sm_role_colors = {
+                    "economic buyer": "#E8692A", "champion": "#00A862",
+                    "technical buyer": "#0091AE", "influencer": "#516F90",
+                }
+                if _sm_list:
+                    for s in _sm_list:
+                        _role = (s.get("role") or "").strip()
+                        _rc = _sm_role_colors.get(_role.lower(), "#7C98B6")
+                        st.markdown(
+                            f"<div style='background:white;border:1px solid #DFE3EB;"
+                            f"border-left:3px solid {_rc};border-radius:6px;"
+                            f"padding:10px 14px;margin-bottom:8px'>"
+                            f"<div style='display:flex;justify-content:space-between;align-items:baseline;gap:8px'>"
+                            f"<span style='font-size:14px;color:#33475B;font-weight:700'>{s.get('name','')}</span>"
+                            + (f"<span style='font-size:10px;font-weight:700;text-transform:uppercase;"
+                               f"letter-spacing:0.5px;background:{_rc};color:white;padding:2px 8px;"
+                               f"border-radius:10px;white-space:nowrap'>{_role}</span>" if _role else "")
+                            + "</div>"
+                            + (f"<div style='font-size:12px;color:#7C98B6;margin-top:2px'>{s.get('title','')}</div>"
+                               if s.get("title") else "")
+                            + (f"<div style='font-size:13px;color:#33475B;margin-top:6px;white-space:pre-wrap'>{s.get('bio','')}</div>"
+                               if s.get("bio") else "")
+                            + "</div>",
+                            unsafe_allow_html=True,
+                        )
+                else:
+                    st.caption("_No researched stakeholders yet — generate a map with live web research._")
+
+                _sm_btn = "🤖 Generate Stakeholder Map" if not _sm_list else "🔄 Regenerate Stakeholder Map"
+                if st.button(
+                    _sm_btn, type="primary", use_container_width=True,
+                    disabled=not _sm_api_ready, key=f"gen_sm_{_ap_c.get('id')}",
+                    help="Uses Claude with live web search to find the company's key executives and write short bios. Review before relying on it.",
+                ):
+                    with st.spinner("Researching stakeholders on the web with Claude… (this can take up to a minute)"):
+                        _sm_data, _sm_err = _generate_stakeholder_map(_ap_c)
+                    if _sm_data:
+                        db.upsert_client({**_ap_c, "stakeholder_map": json.dumps(_sm_data)})
+                        st.success(f"Found {len(_sm_data)} stakeholders.")
+                        st.rerun()
+                    else:
+                        st.error(f"Generation failed: {_sm_err}")
+                if not _sm_api_ready:
+                    st.caption("_Add `ANTHROPIC_API_KEY` to Streamlit secrets to enable AI drafting._")
+                st.divider()
+
+                st.markdown("#### Stakeholder Map (from deals & plan)")
 
                 _sh_groups = [
                     ("🏛️ Economic Buyer / Decision Maker", "#E8692A"),

@@ -534,7 +534,7 @@ def init_db():
         "business_strategy TEXT", "business_challenges TEXT", "competitive_landscape TEXT",
         "account_tier TEXT", "budget_cycle TEXT", "executive_sponsor TEXT",
         "champion TEXT", "account_goals TEXT", "white_space TEXT",
-        "company_overview TEXT",
+        "company_overview TEXT", "stakeholder_map TEXT",
     ])
     # Migrate: scale value_sgd from thousands to full S$ for records entered before unit change
     _migrate_value_sgd_to_full()
@@ -837,6 +837,7 @@ def upsert_client(data: dict):
     data.setdefault("account_goals", "")
     data.setdefault("white_space", "")
     data.setdefault("company_overview", "")
+    data.setdefault("stakeholder_map", "")
     data["updated_at"] = now
     conn = get_conn()
     try:
@@ -856,6 +857,7 @@ def upsert_client(data: dict):
                     executive_sponsor=:executive_sponsor, champion=:champion,
                     account_goals=:account_goals, white_space=:white_space,
                     company_overview=:company_overview,
+                    stakeholder_map=:stakeholder_map,
                     updated_at=:updated_at
                 WHERE id=:id
             """), data)
@@ -868,14 +870,14 @@ def upsert_client(data: dict):
                      annual_revenue, employee_count, website, business_strategy,
                      business_challenges, competitive_landscape, account_tier,
                      budget_cycle, executive_sponsor, champion, account_goals, white_space,
-                     company_overview, created_at, updated_at)
+                     company_overview, stakeholder_map, created_at, updated_at)
                 VALUES
                     (:company, :sector, :sub_sector, :company_size, :buyer_type, :country,
                      :key_contact, :contact_title, :relationship_score, :ai_maturity, :notes,
                      :annual_revenue, :employee_count, :website, :business_strategy,
                      :business_challenges, :competitive_landscape, :account_tier,
                      :budget_cycle, :executive_sponsor, :champion, :account_goals, :white_space,
-                     :company_overview, :created_at, :updated_at)
+                     :company_overview, :stakeholder_map, :created_at, :updated_at)
             """), data)
         _commit(conn)
         return data["id"]
