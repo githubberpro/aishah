@@ -260,11 +260,11 @@ SERVICE_TYPES = [
     "AI Audit & Assurance", "Other",
 ]
 _CHAT_MODELS = {
-    "Sonnet 4.6": "claude-sonnet-4-6",
-    "Haiku 4.5 (Fast)": "claude-haiku-4-5-20251001",
-    "Opus 4.8 (Powerful)": "claude-opus-4-8",
+    "Sonnet (Balanced)": "claude-sonnet-5",
+    "Haiku (Fast)": "claude-haiku-4-5-20251001",
+    "Opus (Powerful)": "claude-opus-4-8",
 }
-_CHAT_MODEL_DEFAULT = "Sonnet 4.6"
+_CHAT_MODEL_DEFAULT = "Sonnet (Balanced)"
 
 CONTRACT_TYPES = [
     "Project", "Retainer", "Project + Retainer",
@@ -1318,6 +1318,90 @@ def _dedup_chat(msgs: list) -> list:
         result.append(msgs[j])
         i = j + 1
     return result
+
+
+def _account_section_chat(client: dict, section_key: str, section_label: str):
+    """Render a persistent per-section 'Ask Aishah' chat for one Account Plan section.
+
+    Chat history is stored per (client_id, section_key) in client_chat_history, so it
+    survives reboots. Each chat has its own model dropdown (defaults to Sonnet).
+    """
+    cid = client.get("id")
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    with st.expander(f"💬 Ask Aishah about {section_label}", expanded=False):
+        if not api_key:
+            st.caption("_Add `ANTHROPIC_API_KEY` to Streamlit secrets to enable chat._")
+            return
+
+        _cc1, _cc2, _ = st.columns([1, 2, 3])
+        if _cc1.button("🗑️ Clear", key=f"clr_ap_chat_{cid}_{section_key}"):
+            db.clear_client_chat(cid, section_key)
+            st.rerun()
+        _model = _CHAT_MODELS[_cc2.selectbox(
+            "Model", list(_CHAT_MODELS.keys()),
+            index=list(_CHAT_MODELS.keys()).index(_CHAT_MODEL_DEFAULT),
+            key=f"ap_chat_model_{cid}_{section_key}", label_visibility="collapsed",
+        )]
+
+        history = _dedup_chat(db.get_client_chat(cid, section_key, limit=40))
+        _box = st.container(height=340)
+        with _box:
+            if not history:
+                st.caption("_Ask about goals, tactics, risks, or how to strengthen this section._")
+            for msg in history:
+                with st.chat_message(msg["role"], avatar="🤖" if msg["role"] == "assistant" else None):
+                    st.markdown(msg["content"])
+
+        _current = (client.get(section_key) or "").strip() or "(this section is currently empty)"
+        _sys = (
+            "You are Aishah, an AI account strategist at a professional-services firm. "
+            f"You are helping the account team refine the '{section_label}' section of the "
+            f"account plan for {client.get('company', 'this client')} "
+            f"(sector: {client.get('sector', '')}, country: {client.get('country', '')}).\n\n"
+            f"Current content of this section:\n{_current}\n\n"
+            "Wider account context — "
+            f"strategy: {(client.get('business_strategy') or '')[:600]}; "
+            f"challenges: {(client.get('business_challenges') or '')[:600]}; "
+            f"competition: {(client.get('competitive_landscape') or '')[:600]}.\n\n"
+            "Answer concisely and practically with specific, actionable suggestions for "
+            "this section. Plain text only — do not return JSON."
+        )
+
+        _prompt = st.chat_input(f"Ask about {section_label}…", key=f"ap_chat_input_{cid}_{section_key}")
+        if _prompt:
+            db.save_client_chat(cid, section_key, "user", _prompt)
+            recent = db.get_client_chat(cid, section_key, limit=20)
+            _raw = [
+                {"role": m["role"], "content": m["content"]}
+                for m in recent[:-1] if (m.get("content") or "").strip()
+            ]
+            api_messages = _dedup_chat(_raw)
+            api_messages.append({"role": "user", "content": _prompt})
+
+            final_text = ""
+            with _box:
+                with st.chat_message("user"):
+                    st.markdown(_prompt)
+                with st.chat_message("assistant", avatar="🤖"):
+                    with st.spinner("Responding…"):
+                        try:
+                            _chat_ai = anthropic.Anthropic(api_key=api_key)
+                            resp = _chat_ai.messages.create(
+                                model=_model,
+                                max_tokens=2048,
+                                system=_sys,
+                                messages=api_messages,
+                            )
+                            for block in resp.content:
+                                if hasattr(block, "text"):
+                                    final_text += block.text
+                        except Exception as exc:
+                            final_text = f"⚠️ Error ({type(exc).__name__}): {exc}"
+                    st.markdown(final_text)
+            if not final_text.strip():
+                final_text = "(no response — try again)"
+            db.save_client_chat(cid, section_key, "assistant", final_text)
+            st.rerun()
 
 
 def _cp_inline_panel(cp_id: int):
@@ -3037,6 +3121,7 @@ elif page == "Account Plan":
                         )
                     else:
                         st.caption(f"_{placeholder}_")
+                    _account_section_chat(_ap_c, field, heading)
                     st.markdown("")
 
                 # Upcoming actions from active deals

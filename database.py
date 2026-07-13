@@ -311,6 +311,14 @@ CREATE TABLE IF NOT EXISTS cp_chat_history (
     content         TEXT NOT NULL,
     created_at      TEXT
 );
+CREATE TABLE IF NOT EXISTS client_chat_history (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    client_id       INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+    section         TEXT NOT NULL,
+    role            TEXT NOT NULL CHECK(role IN ('user','assistant')),
+    content         TEXT NOT NULL,
+    created_at      TEXT
+);
 CREATE TABLE IF NOT EXISTS eminence_chat_history (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     role       TEXT NOT NULL CHECK(role IN ('user','assistant')),
@@ -473,6 +481,14 @@ _PG_TABLES = [
         content         TEXT NOT NULL,
         created_at      TEXT
     )""",
+    """CREATE TABLE IF NOT EXISTS client_chat_history (
+        id              SERIAL PRIMARY KEY,
+        client_id       INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+        section         TEXT NOT NULL,
+        role            TEXT NOT NULL CHECK(role IN ('user','assistant')),
+        content         TEXT NOT NULL,
+        created_at      TEXT
+    )""",
     """CREATE TABLE IF NOT EXISTS eminence_chat_history (
         id         SERIAL PRIMARY KEY,
         role       TEXT NOT NULL CHECK(role IN ('user','assistant')),
@@ -526,6 +542,7 @@ def init_db():
     _migrate_create_channel_partners()
     _migrate_create_scope_tables()
     _migrate_create_cp_chat()
+    _migrate_create_client_chat()
     _migrate_create_eminence_tables()
     _migrate_add_columns("channel_partners", [
         "health_score INTEGER DEFAULT 3",
@@ -684,6 +701,30 @@ def _migrate_create_cp_chat():
             conn.execute("""CREATE TABLE IF NOT EXISTS cp_chat_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 cp_id INTEGER NOT NULL REFERENCES channel_partners(id) ON DELETE CASCADE,
+                role TEXT NOT NULL CHECK(role IN ('user','assistant')),
+                content TEXT NOT NULL, created_at TEXT)""")
+        _commit(conn)
+    finally:
+        _close(conn)
+
+
+def _migrate_create_client_chat():
+    """Create client_chat_history table on existing databases that pre-date it."""
+    conn = get_conn()
+    try:
+        if _setup():
+            with conn.cursor() as cur:
+                cur.execute("""CREATE TABLE IF NOT EXISTS client_chat_history (
+                    id SERIAL PRIMARY KEY,
+                    client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                    section TEXT NOT NULL,
+                    role TEXT NOT NULL CHECK(role IN ('user','assistant')),
+                    content TEXT NOT NULL, created_at TEXT)""")
+        else:
+            conn.execute("""CREATE TABLE IF NOT EXISTS client_chat_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                section TEXT NOT NULL,
                 role TEXT NOT NULL CHECK(role IN ('user','assistant')),
                 content TEXT NOT NULL, created_at TEXT)""")
         _commit(conn)
@@ -1432,6 +1473,47 @@ def clear_cp_chat(cp_id: int):
     conn = get_conn()
     try:
         _run(conn, f"DELETE FROM cp_chat_history WHERE cp_id = {ph}", (cp_id,))
+        _commit(conn)
+    finally:
+        _close(conn)
+
+
+# ── Per-account-section chat (Account Plan "Ask Aishah") ─────────────────────────
+
+def save_client_chat(client_id: int, section: str, role: str, content: str):
+    ph = _ph()
+    now = datetime.now().isoformat()
+    conn = get_conn()
+    try:
+        _run(conn,
+             f"INSERT INTO client_chat_history (client_id, section, role, content, created_at) "
+             f"VALUES ({ph},{ph},{ph},{ph},{ph})",
+             (client_id, section, role, content, now))
+        _commit(conn)
+    finally:
+        _close(conn)
+
+
+def get_client_chat(client_id: int, section: str, limit: int = 40):
+    ph = _ph()
+    conn = get_conn()
+    try:
+        rows = _q(conn,
+                  f"SELECT role, content FROM client_chat_history "
+                  f"WHERE client_id = {ph} AND section = {ph} ORDER BY id DESC LIMIT {ph}",
+                  (client_id, section, limit))
+        return list(reversed(rows))
+    finally:
+        _close(conn)
+
+
+def clear_client_chat(client_id: int, section: str):
+    ph = _ph()
+    conn = get_conn()
+    try:
+        _run(conn,
+             f"DELETE FROM client_chat_history WHERE client_id = {ph} AND section = {ph}",
+             (client_id, section))
         _commit(conn)
     finally:
         _close(conn)
