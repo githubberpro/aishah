@@ -1121,15 +1121,17 @@ def _generate_proposal(opp: dict, scope_docs: list) -> tuple:
 
 _STRATEGIC_INTEL_SYSTEM = (
     "You are a senior management consultant preparing account intelligence for a "
-    "professional-services firm. Given a client company, produce concise, specific, "
-    "board-level strategic intelligence. Base it on what is publicly known about the "
-    "company and its sector; where you are inferring from sector norms rather than "
-    "company-specific facts, keep it plausible and clearly general. Do NOT fabricate "
-    "specific figures, executive names, or events you are not confident about. "
-    "Respond ONLY with a JSON object having exactly these three string keys: "
-    "\"business_strategy\", \"business_challenges\", \"competitive_landscape\". "
-    "Each value is 3-6 sentences of well-structured prose (short newline-separated "
-    "bullet lines are fine). No markdown code fences, no extra keys, no commentary."
+    "professional-services firm. Use the web_search tool to find CURRENT, specific, "
+    "verifiable information about the client company — recent strategy announcements, "
+    "financial results, leadership priorities, transformation programmes, regulatory "
+    "and operational pressures, and which competitors and advisory firms are active in "
+    "its space. Prefer recent, reputable sources. Do NOT fabricate figures, executive "
+    "names, or events — if you cannot verify something, describe it in general sector "
+    "terms or omit it. After researching, respond ONLY with a JSON object having "
+    "exactly these three string keys: \"business_strategy\", \"business_challenges\", "
+    "\"competitive_landscape\". Each value is 3-6 sentences of concise, board-level "
+    "prose (short newline-separated bullet lines are fine). No markdown code fences, "
+    "no citation markup, no extra keys, no commentary outside the JSON object."
 )
 
 
@@ -1159,36 +1161,49 @@ def _generate_strategic_intel(client: dict) -> tuple:
         "Return the three sections as a JSON object."
     )
     client_ai = anthropic.Anthropic(api_key=api_key)
-    # Stream so a long generation doesn't sit idle and get dropped by a proxy.
+    # Live web research via the server-side web_search tool (bounded to 5 searches).
+    tools = [{"type": "web_search_20260209", "name": "web_search", "max_uses": 5}]
+    # Stream so a long research run doesn't sit idle and get dropped by a proxy.
+    # Try adaptive thinking first; fall back to a plain request if unsupported.
     for kwargs in [
         {"thinking": {"type": "adaptive"}, "max_tokens": 4000},
-        {"max_tokens": 2000},
+        {"max_tokens": 2500},
     ]:
         try:
-            with client_ai.messages.stream(
-                model="claude-opus-4-8",
-                system=_STRATEGIC_INTEL_SYSTEM,
-                messages=[{"role": "user", "content": prompt}],
-                **kwargs,
-            ) as stream:
-                resp = stream.get_final_message()
-            for block in resp.content:
-                if hasattr(block, "text"):
-                    txt = block.text.strip()
-                    fence_start = txt.find("```json")
-                    if fence_start >= 0:
-                        fence_end = txt.find("```", fence_start + 7)
-                        if fence_end > fence_start:
-                            txt = txt[fence_start + 7:fence_end].strip()
-                    start = txt.find("{")
-                    end = txt.rfind("}") + 1
-                    if start >= 0 and end > start:
-                        data = json.loads(txt[start:end])
-                        return {
-                            "business_strategy": (data.get("business_strategy") or "").strip(),
-                            "business_challenges": (data.get("business_challenges") or "").strip(),
-                            "competitive_landscape": (data.get("competitive_landscape") or "").strip(),
-                        }, None
+            messages = [{"role": "user", "content": prompt}]
+            resp = None
+            # The web_search server-tool loop can pause (stop_reason "pause_turn");
+            # resume until it produces a final answer, with a hard cap.
+            for _ in range(6):
+                with client_ai.messages.stream(
+                    model="claude-opus-4-8",
+                    system=_STRATEGIC_INTEL_SYSTEM,
+                    messages=messages,
+                    tools=tools,
+                    **kwargs,
+                ) as stream:
+                    resp = stream.get_final_message()
+                if resp.stop_reason != "pause_turn":
+                    break
+                messages.append({"role": "assistant", "content": resp.content})
+            combined = "\n".join(
+                b.text for b in (resp.content if resp else [])
+                if getattr(b, "type", None) == "text"
+            ).strip()
+            fence_start = combined.find("```json")
+            if fence_start >= 0:
+                fence_end = combined.find("```", fence_start + 7)
+                if fence_end > fence_start:
+                    combined = combined[fence_start + 7:fence_end].strip()
+            start = combined.find("{")
+            end = combined.rfind("}") + 1
+            if start >= 0 and end > start:
+                data = json.loads(combined[start:end])
+                return {
+                    "business_strategy": (data.get("business_strategy") or "").strip(),
+                    "business_challenges": (data.get("business_challenges") or "").strip(),
+                    "competitive_landscape": (data.get("competitive_landscape") or "").strip(),
+                }, None
             return None, "Claude responded but returned no JSON. Try again."
         except anthropic.BadRequestError as exc:
             if "thinking" in str(exc).lower() or "adaptive" in str(exc).lower():
@@ -2724,9 +2739,9 @@ elif page == "Account Plan":
                 if st.button(
                     _si_btn_label, type="primary", use_container_width=True,
                     disabled=not _si_api_ready, key=f"gen_si_{_ap_c.get('id')}",
-                    help="Uses Claude to draft these three sections from the account profile. Review before relying on it.",
+                    help="Uses Claude with live web search to research and draft these three sections. Review before relying on it.",
                 ):
-                    with st.spinner("Researching the account with Claude…"):
+                    with st.spinner("Researching the account on the web with Claude… (this can take up to a minute)"):
                         _si_data, _si_err = _generate_strategic_intel(_ap_c)
                     if _si_data:
                         db.upsert_client({**_ap_c, **_si_data})
