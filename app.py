@@ -1119,6 +1119,86 @@ def _generate_proposal(opp: dict, scope_docs: list) -> tuple:
     return None, "Generation failed after retrying without extended thinking."
 
 
+_STRATEGIC_INTEL_SYSTEM = (
+    "You are a senior management consultant preparing account intelligence for a "
+    "professional-services firm. Given a client company, produce concise, specific, "
+    "board-level strategic intelligence. Base it on what is publicly known about the "
+    "company and its sector; where you are inferring from sector norms rather than "
+    "company-specific facts, keep it plausible and clearly general. Do NOT fabricate "
+    "specific figures, executive names, or events you are not confident about. "
+    "Respond ONLY with a JSON object having exactly these three string keys: "
+    "\"business_strategy\", \"business_challenges\", \"competitive_landscape\". "
+    "Each value is 3-6 sentences of well-structured prose (short newline-separated "
+    "bullet lines are fine). No markdown code fences, no extra keys, no commentary."
+)
+
+
+def _generate_strategic_intel(client: dict) -> tuple:
+    """Call Claude to draft the three Strategic Intel fields for a client.
+    Returns (dict, None) on success or (None, error_str) on failure.
+    """
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        return None, "ANTHROPIC_API_KEY not set in Streamlit secrets."
+    facts = "\n".join(
+        f"{label}: {client.get(key)}"
+        for label, key in [
+            ("Company", "company"), ("Sector", "sector"), ("Sub-sector", "sub_sector"),
+            ("Country", "country"), ("Company size", "company_size"),
+            ("Employee count", "employee_count"), ("Annual revenue", "annual_revenue"),
+            ("Website", "website"), ("Buyer type", "buyer_type"),
+            ("AI maturity", "ai_maturity"), ("Existing notes", "notes"),
+        ]
+        if client.get(key)
+    )
+    prompt = (
+        "Prepare strategic account intelligence for the following client. "
+        "Cover (1) company strategy & priorities, (2) business challenges & pain "
+        "points, and (3) competitive landscape.\n\n"
+        f"{facts}\n\n"
+        "Return the three sections as a JSON object."
+    )
+    client_ai = anthropic.Anthropic(api_key=api_key)
+    # Stream so a long generation doesn't sit idle and get dropped by a proxy.
+    for kwargs in [
+        {"thinking": {"type": "adaptive"}, "max_tokens": 4000},
+        {"max_tokens": 2000},
+    ]:
+        try:
+            with client_ai.messages.stream(
+                model="claude-opus-4-8",
+                system=_STRATEGIC_INTEL_SYSTEM,
+                messages=[{"role": "user", "content": prompt}],
+                **kwargs,
+            ) as stream:
+                resp = stream.get_final_message()
+            for block in resp.content:
+                if hasattr(block, "text"):
+                    txt = block.text.strip()
+                    fence_start = txt.find("```json")
+                    if fence_start >= 0:
+                        fence_end = txt.find("```", fence_start + 7)
+                        if fence_end > fence_start:
+                            txt = txt[fence_start + 7:fence_end].strip()
+                    start = txt.find("{")
+                    end = txt.rfind("}") + 1
+                    if start >= 0 and end > start:
+                        data = json.loads(txt[start:end])
+                        return {
+                            "business_strategy": (data.get("business_strategy") or "").strip(),
+                            "business_challenges": (data.get("business_challenges") or "").strip(),
+                            "competitive_landscape": (data.get("competitive_landscape") or "").strip(),
+                        }, None
+            return None, "Claude responded but returned no JSON. Try again."
+        except anthropic.BadRequestError as exc:
+            if "thinking" in str(exc).lower() or "adaptive" in str(exc).lower():
+                continue  # retry without thinking
+            return None, f"API error: {exc}"
+        except Exception as exc:
+            return None, f"{type(exc).__name__}: {exc}"
+    return None, "Generation failed after retrying without extended thinking."
+
+
 def _proposal_total(proposal: dict) -> float:
     return sum(
         r.get("rate_per_day", 0) * r.get("days", 0)
@@ -2637,6 +2717,27 @@ elif page == "Account Plan":
                     ("⚔️ Competitive Landscape", "competitive_landscape",
                      "Which other firms are engaged with this account? Where are we strong vs. at risk?"),
                 ]
+
+                _si_api_ready = bool(os.environ.get("ANTHROPIC_API_KEY", ""))
+                _si_has_content = any(_ap_c.get(f) for _, f, _ in _si_sections)
+                _si_btn_label = "🤖 Generate with Aishah" if not _si_has_content else "🔄 Regenerate with Aishah"
+                if st.button(
+                    _si_btn_label, type="primary", use_container_width=True,
+                    disabled=not _si_api_ready, key=f"gen_si_{_ap_c.get('id')}",
+                    help="Uses Claude to draft these three sections from the account profile. Review before relying on it.",
+                ):
+                    with st.spinner("Researching the account with Claude…"):
+                        _si_data, _si_err = _generate_strategic_intel(_ap_c)
+                    if _si_data:
+                        db.upsert_client({**_ap_c, **_si_data})
+                        st.success("Strategic intelligence drafted — review and refine in the Edit Plan tab.")
+                        st.rerun()
+                    else:
+                        st.error(f"Generation failed: {_si_err}")
+                if not _si_api_ready:
+                    st.caption("_Add `ANTHROPIC_API_KEY` to Streamlit secrets to enable AI drafting._")
+                st.markdown("")
+
                 for heading, field, placeholder in _si_sections:
                     val = _ap_c.get(field, "")
                     st.markdown(f"#### {heading}")
