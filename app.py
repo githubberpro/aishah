@@ -234,6 +234,16 @@ st.markdown("""
     z-index: 9999; transition: transform 0.18s ease, box-shadow 0.18s ease;
 }
 .aishah-fab:hover { transform: scale(1.10); box-shadow: 0 6px 26px rgba(255,122,89,0.65); }
+
+/* Chat text — match the 13px body font used in the sections above */
+[data-testid="stChatMessage"] p,
+[data-testid="stChatMessage"] li,
+[data-testid="stChatMessageContent"] p,
+[data-testid="stChatMessageContent"] li {
+    font-size: 13px !important;
+    line-height: 1.5 !important;
+}
+[data-testid="stChatInput"] textarea { font-size: 13px !important; }
 </style>
 """, unsafe_allow_html=True)
 
