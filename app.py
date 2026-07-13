@@ -2047,9 +2047,27 @@ def _opp_inline_panel(opp_id: int):
                     f"Service: {opp.get('ai_service_type','')} | EP: {opp.get('engagement_partner','')} EM: {opp.get('engagement_manager','')}\n"
                     f"Close Date: {opp.get('expected_close_date','TBD')}"
                 )
+                # Parent account plan context so the chat can reference it
+                _acct = db.get_client(opp.get("client_id")) if opp.get("client_id") else None
+                if _acct:
+                    _account_ctx = (
+                        f"Company Overview: {(_acct.get('company_overview') or '—')[:1500]}\n"
+                        f"Business Strategy & Priorities: {(_acct.get('business_strategy') or '—')[:1500]}\n"
+                        f"Business Challenges & Pain Points: {(_acct.get('business_challenges') or '—')[:1500]}\n"
+                        f"Competitive Landscape: {(_acct.get('competitive_landscape') or '—')[:1500]}\n"
+                        f"Account Goals: {(_acct.get('account_goals') or '—')[:1200]}\n"
+                        f"White Space & Growth: {(_acct.get('white_space') or '—')[:1200]}\n"
+                        f"Account Tier: {_acct.get('account_tier') or '—'} | "
+                        f"Relationship Score: {_acct.get('relationship_score') or '—'}/5 | "
+                        f"Exec Sponsor: {_acct.get('executive_sponsor') or '—'} | "
+                        f"Champion: {_acct.get('champion') or '—'}"
+                    )
+                else:
+                    _account_ctx = "No account plan available for this client."
                 _chat_system = (
                     f"{_PROPOSAL_SYSTEM}\n\n"
                     f"=== CURRENT OPPORTUNITY ===\n{_opp_ctx}\n\n"
+                    f"=== ACCOUNT PLAN (parent account context) ===\n{_account_ctx}\n\n"
                     f"=== SCOPE DOCUMENTS ===\n{_scope_ctx[:6000]}\n\n"
                     f"=== CURRENT PROPOSAL ===\n{_prop_ctx[:6000]}\n\n"
                     "=== CHAT MODE — OVERRIDE ALL PREVIOUS OUTPUT INSTRUCTIONS ===\n"
