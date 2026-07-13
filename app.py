@@ -3144,7 +3144,7 @@ elif page == "Account Plan":
                         _sm_df, num_rows="dynamic", use_container_width=True, hide_index=True,
                         key=f"sm_editor_{_ap_c.get('id')}",
                         column_config={
-                            "name": st.column_config.TextColumn("Name", width="medium", required=True),
+                            "name": st.column_config.TextColumn("Name", width="medium"),
                             "title": st.column_config.TextColumn("Title", width="medium"),
                             "role": st.column_config.SelectboxColumn("Role", options=_SM_ROLE_OPTIONS, width="small"),
                             "relationship_score": st.column_config.NumberColumn(
