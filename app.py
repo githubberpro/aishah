@@ -2960,6 +2960,7 @@ elif page == "Account Plan":
                         )
                     else:
                         st.caption(f"_{placeholder}_")
+                    _account_section_chat(_ap_c, field, heading)
                     st.markdown("")
 
             # ── Stakeholders ──────────────────────────────────────────────────
