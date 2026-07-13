@@ -1385,6 +1385,7 @@ def _generate_stakeholder_map(client: dict) -> tuple:
                             "name": str(s.get("name", "")).strip(),
                             "title": str(s.get("title", "")).strip(),
                             "role": str(s.get("role", "")).strip(),
+                            "relationship_score": 3,  # neutral default; team adjusts
                             "bio": str(s.get("bio", "")).strip(),
                         }
                         for s in stakeholders if isinstance(s, dict) and s.get("name")
@@ -3089,6 +3090,11 @@ elif page == "Account Plan":
                     for s in _sm_list:
                         _role = (s.get("role") or "").strip()
                         _rc = _sm_role_colors.get(_role.lower(), "#7C98B6")
+                        try:
+                            _score = int(s.get("relationship_score") or 0)
+                        except Exception:
+                            _score = 0
+                        _stars = "★" * max(0, min(5, _score)) + "☆" * (5 - max(0, min(5, _score)))
                         st.markdown(
                             f"<div style='background:white;border:1px solid #DFE3EB;"
                             f"border-left:3px solid {_rc};border-radius:6px;"
@@ -3101,13 +3107,76 @@ elif page == "Account Plan":
                             + "</div>"
                             + (f"<div style='font-size:12px;color:#7C98B6;margin-top:2px'>{s.get('title','')}</div>"
                                if s.get("title") else "")
+                            + (f"<div style='font-size:12px;color:#F5A623;margin-top:3px' "
+                               f"title='Relationship score'>{_stars}</div>" if _score else "")
                             + (f"<div style='font-size:13px;color:#33475B;margin-top:6px;white-space:pre-wrap'>{s.get('bio','')}</div>"
                                if s.get("bio") else "")
                             + "</div>",
                             unsafe_allow_html=True,
                         )
                 else:
-                    st.caption("_No researched stakeholders yet — generate a map with live web research._")
+                    st.caption("_No researched stakeholders yet — generate a map with live web research, or add stakeholders manually below._")
+
+                # ── Edit / add / remove stakeholders ──────────────────────────
+                with st.expander("✏️ Edit / add stakeholders", expanded=False):
+                    st.caption(
+                        "Edit any cell, tick a row and press ⌫ to delete, or use the bottom "
+                        "row to add a stakeholder. Relationship score is 1 (weak) to 5 (strong)."
+                    )
+                    _SM_ROLE_OPTIONS = [
+                        "Economic Buyer", "Champion", "Technical Buyer",
+                        "Influencer", "Executive", "Detractor",
+                    ]
+                    _sm_df = pd.DataFrame(
+                        [
+                            {
+                                "name": s.get("name", ""),
+                                "title": s.get("title", ""),
+                                "role": s.get("role", ""),
+                                "relationship_score": int(s.get("relationship_score") or 3),
+                                "bio": s.get("bio", ""),
+                            }
+                            for s in _sm_list
+                        ],
+                        columns=["name", "title", "role", "relationship_score", "bio"],
+                    )
+                    _sm_edited = st.data_editor(
+                        _sm_df, num_rows="dynamic", use_container_width=True, hide_index=True,
+                        key=f"sm_editor_{_ap_c.get('id')}",
+                        column_config={
+                            "name": st.column_config.TextColumn("Name", width="medium", required=True),
+                            "title": st.column_config.TextColumn("Title", width="medium"),
+                            "role": st.column_config.SelectboxColumn("Role", options=_SM_ROLE_OPTIONS, width="small"),
+                            "relationship_score": st.column_config.NumberColumn(
+                                "Rel. 1-5", min_value=1, max_value=5, step=1, width="small",
+                            ),
+                            "bio": st.column_config.TextColumn("Bio", width="large"),
+                        },
+                    )
+                    if st.button("💾 Save stakeholders", type="primary", key=f"save_sm_{_ap_c.get('id')}"):
+                        _new_sm = []
+                        for _, _row in _sm_edited.iterrows():
+                            _nm = _row.get("name")
+                            _name = "" if pd.isna(_nm) else str(_nm).strip()
+                            if not _name:
+                                continue
+                            _rsv = _row.get("relationship_score")
+                            try:
+                                _rs = 3 if pd.isna(_rsv) else int(_rsv)
+                            except Exception:
+                                _rs = 3
+                            _rs = max(1, min(5, _rs))
+                            _tt, _rl, _bi = _row.get("title"), _row.get("role"), _row.get("bio")
+                            _new_sm.append({
+                                "name": _name,
+                                "title": "" if pd.isna(_tt) else str(_tt).strip(),
+                                "role": "" if pd.isna(_rl) else str(_rl).strip(),
+                                "relationship_score": _rs,
+                                "bio": "" if pd.isna(_bi) else str(_bi).strip(),
+                            })
+                        db.upsert_client({**_ap_c, "stakeholder_map": json.dumps(_new_sm)})
+                        st.success("Stakeholders saved.")
+                        st.rerun()
 
                 _sm_btn = "🤖 Generate Stakeholder Map" if not _sm_list else "🔄 Regenerate Stakeholder Map"
                 if st.button(
