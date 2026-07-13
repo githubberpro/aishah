@@ -1214,6 +1214,87 @@ def _generate_strategic_intel(client: dict) -> tuple:
     return None, "Generation failed after retrying without extended thinking."
 
 
+_COMPANY_OVERVIEW_SYSTEM = (
+    "You are a research analyst at a professional-services firm. Use the web_search "
+    "tool to research the client company and write a crisp overview an account team can "
+    "read in 30 seconds. Cover what the company does, its scale (revenue, employees, "
+    "footprint), ownership/structure, recent notable developments, and its position in "
+    "its sector. Prefer recent, reputable sources; do NOT fabricate figures or events "
+    "you cannot verify — describe uncertain points in general terms or omit them. "
+    "Respond ONLY with a JSON object having exactly one string key \"company_overview\": "
+    "4-8 sentences of concise prose (short newline-separated bullet lines are fine). "
+    "No markdown code fences, no citation markup, no extra keys, no commentary."
+)
+
+
+def _generate_company_overview(client: dict) -> tuple:
+    """Call Claude (with live web search) to draft a company overview for a client.
+    Returns (str, None) on success or (None, error_str) on failure.
+    """
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        return None, "ANTHROPIC_API_KEY not set in Streamlit secrets."
+    facts = "\n".join(
+        f"{label}: {client.get(key)}"
+        for label, key in [
+            ("Company", "company"), ("Sector", "sector"), ("Sub-sector", "sub_sector"),
+            ("Country", "country"), ("Website", "website"),
+            ("Employee count", "employee_count"), ("Annual revenue", "annual_revenue"),
+        ]
+        if client.get(key)
+    )
+    prompt = (
+        "Research and write a company overview for the following client.\n\n"
+        f"{facts}\n\n"
+        "Return the overview as a JSON object."
+    )
+    client_ai = anthropic.Anthropic(api_key=api_key)
+    tools = [{"type": "web_search_20260209", "name": "web_search", "max_uses": 5}]
+    for kwargs in [
+        {"thinking": {"type": "adaptive"}, "max_tokens": 3000},
+        {"max_tokens": 1800},
+    ]:
+        try:
+            messages = [{"role": "user", "content": prompt}]
+            resp = None
+            for _ in range(6):
+                with client_ai.messages.stream(
+                    model="claude-opus-4-8",
+                    system=_COMPANY_OVERVIEW_SYSTEM,
+                    messages=messages,
+                    tools=tools,
+                    **kwargs,
+                ) as stream:
+                    resp = stream.get_final_message()
+                if resp.stop_reason != "pause_turn":
+                    break
+                messages.append({"role": "assistant", "content": resp.content})
+            combined = "\n".join(
+                b.text for b in (resp.content if resp else [])
+                if getattr(b, "type", None) == "text"
+            ).strip()
+            fence_start = combined.find("```json")
+            if fence_start >= 0:
+                fence_end = combined.find("```", fence_start + 7)
+                if fence_end > fence_start:
+                    combined = combined[fence_start + 7:fence_end].strip()
+            start = combined.find("{")
+            end = combined.rfind("}") + 1
+            if start >= 0 and end > start:
+                data = json.loads(combined[start:end])
+                overview = (data.get("company_overview") or "").strip()
+                if overview:
+                    return overview, None
+            return None, "Claude responded but returned no overview. Try again."
+        except anthropic.BadRequestError as exc:
+            if "thinking" in str(exc).lower() or "adaptive" in str(exc).lower():
+                continue  # retry without thinking
+            return None, f"API error: {exc}"
+        except Exception as exc:
+            return None, f"{type(exc).__name__}: {exc}"
+    return None, "Generation failed after retrying without extended thinking."
+
+
 def _proposal_total(proposal: dict) -> float:
     return sum(
         r.get("rate_per_day", 0) * r.get("days", 0)
@@ -2662,6 +2743,36 @@ elif page == "Account Plan":
 
             # ── Overview ──────────────────────────────────────────────────────
             with _tab_ov:
+                _ov_api_ready = bool(os.environ.get("ANTHROPIC_API_KEY", ""))
+                _ov_existing = _ap_c.get("company_overview", "")
+                st.markdown("#### 🏢 Company Overview")
+                if _ov_existing:
+                    st.markdown(
+                        f"<div style='background:#F5F8FA;border-left:3px solid #FF7A59;"
+                        f"padding:10px 14px;border-radius:4px;font-size:13px;color:#33475B;"
+                        f"white-space:pre-wrap'>{_ov_existing}</div>",
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.caption("_No overview yet — generate one with live web research._")
+                _ov_btn_label = "🤖 Generate company overview" if not _ov_existing else "🔄 Regenerate overview"
+                if st.button(
+                    _ov_btn_label, type="primary", use_container_width=True,
+                    disabled=not _ov_api_ready, key=f"gen_ov_{_ap_c.get('id')}",
+                    help="Uses Claude with live web search to research and write a company overview. Review before relying on it.",
+                ):
+                    with st.spinner("Researching the company on the web with Claude… (this can take up to a minute)"):
+                        _ov_text, _ov_err = _generate_company_overview(_ap_c)
+                    if _ov_text:
+                        db.upsert_client({**_ap_c, "company_overview": _ov_text})
+                        st.success("Company overview generated.")
+                        st.rerun()
+                    else:
+                        st.error(f"Generation failed: {_ov_err}")
+                if not _ov_api_ready:
+                    st.caption("_Add `ANTHROPIC_API_KEY` to Streamlit secrets to enable AI drafting._")
+                st.divider()
+
                 _ov1, _ov2 = st.columns(2)
                 with _ov1:
                     st.markdown("#### Company Profile")
