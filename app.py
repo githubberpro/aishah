@@ -2794,22 +2794,44 @@ elif page == "Account Plan":
     st.markdown("# 📋 Account Plan")
 
     _ap_clients = db.get_clients()
-    _ap_names = [c["company"] for c in _ap_clients]
 
     if not _ap_clients:
         st.info("No accounts yet — add a company first.")
     else:
-        # Preserve selection across reruns
-        _ap_default_idx = 0
-        if st.session_state.get("ap_selected_company") in _ap_names:
-            _ap_default_idx = _ap_names.index(st.session_state["ap_selected_company"])
-
-        _ap_selected = st.selectbox(
-            "Select Account", _ap_names, index=_ap_default_idx, label_visibility="collapsed",
-            placeholder="Choose an account…",
+        # Industry filter → narrows the account dropdown to that sector
+        _ap_sectors = sorted({
+            (c.get("sector") or "").strip() for c in _ap_clients if (c.get("sector") or "").strip()
+        })
+        _ap_ind_options = ["All Industries"] + _ap_sectors
+        _ind_col, _acct_col = st.columns([1, 2])
+        _saved_ind = st.session_state.get("ap_selected_industry", "All Industries")
+        _ap_industry = _ind_col.selectbox(
+            "Industry", _ap_ind_options,
+            index=_ap_ind_options.index(_saved_ind) if _saved_ind in _ap_ind_options else 0,
+            key="ap_industry_filter",
         )
-        st.session_state["ap_selected_company"] = _ap_selected
-        _ap_c = next((c for c in _ap_clients if c["company"] == _ap_selected), None)
+        st.session_state["ap_selected_industry"] = _ap_industry
+
+        _filtered_clients = _ap_clients if _ap_industry == "All Industries" else [
+            c for c in _ap_clients if (c.get("sector") or "").strip() == _ap_industry
+        ]
+        _ap_names = [c["company"] for c in _filtered_clients]
+
+        if not _ap_names:
+            _acct_col.info("No accounts in this industry.")
+            _ap_c = None
+        else:
+            # Preserve selection across reruns
+            _ap_default_idx = 0
+            if st.session_state.get("ap_selected_company") in _ap_names:
+                _ap_default_idx = _ap_names.index(st.session_state["ap_selected_company"])
+
+            _ap_selected = _acct_col.selectbox(
+                "Select Account", _ap_names, index=_ap_default_idx,
+                placeholder="Choose an account…",
+            )
+            st.session_state["ap_selected_company"] = _ap_selected
+            _ap_c = next((c for c in _filtered_clients if c["company"] == _ap_selected), None)
 
         if _ap_c:
             _ap_opps = db.get_opportunities(client_id=_ap_c["id"])
