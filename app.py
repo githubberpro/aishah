@@ -260,7 +260,7 @@ STAGE_BG = {
     "Negotiation": "#FEF0E8", "Won": "#E6F7ED", "Lost": "#F5F5F5",
 }
 SECTOR_LIST = [
-    "Financial Services", "Government", "Technology", "Healthcare",
+    "Financial Services", "Government", "Technology", "Manufacturing", "Healthcare",
     "Logistics & Supply Chain", "Real Estate", "FMCG & Agribusiness",
     "Telecommunications", "Energy", "Education", "Other",
 ]
