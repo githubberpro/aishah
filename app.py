@@ -3193,6 +3193,21 @@ elif page == "Account Plan":
             with _tab_edit:
                 with st.form("ap_edit_form"):
                     st.markdown("#### Account Profile")
+                    _ep0a, _ep0b = st.columns(2)
+                    _sector_opts = list(SECTOR_LIST)
+                    _cur_sector = _ap_c.get("sector", "") or ""
+                    if _cur_sector and _cur_sector not in _sector_opts:
+                        _sector_opts = [_cur_sector] + _sector_opts
+                    _ap_sector = _ep0a.selectbox(
+                        "Sector / Industry", _sector_opts,
+                        index=_sector_opts.index(_cur_sector) if _cur_sector in _sector_opts else 0,
+                    )
+                    _BUYER_TYPES = ["Institutional", "Owner"]
+                    _cur_buyer = _ap_c.get("buyer_type", "") or "Institutional"
+                    _ap_buyer_type = _ep0b.selectbox(
+                        "Buyer Type", _BUYER_TYPES,
+                        index=_BUYER_TYPES.index(_cur_buyer) if _cur_buyer in _BUYER_TYPES else 0,
+                    )
                     _ep1, _ep2 = st.columns(2)
                     _ap_revenue = _ep1.text_input("Annual Revenue", value=_ap_c.get("annual_revenue", ""),
                                                   placeholder="e.g. S$500M")
@@ -3253,6 +3268,8 @@ elif page == "Account Plan":
                     if _ap_saved:
                         db.upsert_client({
                             **_ap_c,
+                            "sector": _ap_sector,
+                            "buyer_type": _ap_buyer_type,
                             "annual_revenue": _ap_revenue,
                             "employee_count": _ap_employees,
                             "website": _ap_website,
